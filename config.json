@@ -2,13 +2,33 @@
     "username_name" : "session_key",
     "password_name" : "session_password",
     "sign_in_button_xpath": "//*[@type='submit']",
-    "load_comments_class" : "comments-comments-list__load-more-comments-button",
+    "load_comments_class" : "comments-comments-list__load-more-comments-button--cr",
     "comment_class" : "comments-comment-item__main-content",
-    "headline_class" : "comments-post-meta__headline",
-    "name_class" : "comments-post-meta__name",
-    "avatar_class" : "comments-post-meta__actor-link",
+    "headline_class" : "comments-comment-meta__description-subtitle",
+    "name_class" : "comments-comment-meta__description-title",
+    "avatar_class" : "comments-comment-meta__image-link",
     "load_replies_class": "show-prev-replies",
     "filename" : "comments-data",
     "dirname": "profile-pics",
-    "post_url": ""
+    "post_url": "https://www.linkedin.com/feed/update/urn:li:activity:7274804300919255040/",
+    "auto_reply": {
+        "enabled": true,
+        "trigger_string": "agent",
+        "reply_message": "thanks for requesting our guide! here's a link: https://newform.kit.com/c4ebb5fb24",
+        "selectors": {
+            "comment_container": "comments-comment-entity",
+            "reply_container": "comments-replies-list",
+            "reply_button": "button.reply",
+            "reply_form": "form.comments-comment-box__form",
+            "reply_input": "ql-editor",
+            "post_button": "comments-comment-box__submit-button--cr",
+            "replies_count": "comments-comment-social-bar__replies-count"
+        },
+        "delays": {
+            "after_scroll": 1,
+            "after_click": 1,
+            "after_type": 1,
+            "after_post": 2
+        }
+    }
 }
