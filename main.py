@@ -92,8 +92,9 @@ options.add_experimental_option("detach", True)
 driver = webdriver.Chrome(
     options=options, service=Service(ChromeDriverManager().install())
 )
-driver.maximize_window()
-driver.get("https://www.linkedin.com")
+# driver = webdriver.Safari()
+# driver.maximize_window()
+# driver.get("https://www.linkedin.com")
 
 def save_cookies(driver, filename):
     """Save cookies to file"""
@@ -108,10 +109,14 @@ def load_cookies(driver, filename):
     
     with open(filename, 'rb') as file:
         cookies = pickle.load(file)
+        print(cookies)
         for cookie in cookies:
+            print(cookie)
             driver.add_cookie(cookie)
     print("Cookies loaded successfully")
     return True
+
+driver.get("https://www.linkedin.com")
 
 cookies_loaded = load_cookies(driver, COOKIES_FILE)
 
@@ -142,18 +147,24 @@ if not cookies_loaded:
 
 driver.get(post_url)
 
+# wait for 1 second
+sleep(4)
+
 # change to most recent comment sort
-# sort_button = driver.find_element(By.CSS_SELECTOR, "button.comments-sort-order-toggle__trigger")
-# sort_button.click()
+sort_button = driver.find_element(By.CSS_SELECTOR, "button.comments-sort-order-toggle__trigger")
+sort_button.click()
+
+# wait for 1 second
+sleep(1)
 
 # # find the most recent comment sort option
-# most_recent_option = driver.find_element(By.CSS_SELECTOR, '[aria-label="Most recent. See all comments, the most recent comments are first"]')
-# most_recent_option.click()
+most_recent_option = driver.find_element(By.CSS_SELECTOR, '[aria-label="Most recent. See all comments, the most recent comments are first"]')
+most_recent_option.click()
 
-input("Press Switch to most recent to continue...")
+# input("Press Switch to most recent to continue...")
 
-print("Loading comments :", end=" ", flush=True)
-load_more("comments", Config["load_comments_class"], driver)
+# print("Loading comments :", end=" ", flush=True)
+# load_more("comments", Config["load_comments_class"], driver)
 if args.show_replies:
     print("Loading replies :", end=" ", flush=True)
     load_more("replies", Config["load_replies_class"], driver)
@@ -232,93 +243,124 @@ if Config.get("auto_reply", {}).get("enabled", False):
     selectors = Config["auto_reply"]["selectors"]
     delays = Config["auto_reply"]["delays"]
     
-    # Find all top-level comments
-    # comments_section = bs_obj.find_all("article", {"class": selectors["comment_container"]})
-    comments_section = driver.find_elements(By.CLASS_NAME, selectors["comment_container"])
-    print(f"Found {len(comments_section)} comments to process")
+    processed_comments = set()  # Keep track of processed comments
     
-    for comment_article in comments_section:
-        try:
-            # Skip if this is a reply (has comments-comment-entity--reply class)
-            try:
-                if comment_article.find_element(By.CLASS_NAME, "comments-comment-entity--reply"):
-                    continue
-            except:
-                pass
-                
-            # Get the comment text
-            comment_text = comment_article.find_element(By.CLASS_NAME, Config["comment_class"])
-            if not comment_text:
-                continue
-            comment_text = comment_text.text.strip().lower()
-            print(comment_text)
+    while True:
+        # Find all currently visible top-level comments
+        comments_section = driver.find_elements(By.CLASS_NAME, selectors["comment_container"])
+        current_batch = [c for c in comments_section if c.id not in processed_comments]
+        
+        if not current_batch:
+            print("No new comments to process")
             
-            # Check if comment contains trigger string
-            if Config["auto_reply"]["trigger_string"].lower() in comment_text:
-                # Check for existing replies
-                replies_list = comment_article.find_elements(By.CLASS_NAME, selectors["reply_container"])
-                replies_count = comment_article.find_elements(By.CLASS_NAME, selectors["replies_count"])
+            # Try to load more comments
+            retries = 0
+            max_retries = 3
+            should_continue = False
+            
+            while retries < max_retries:
+                try:
+                    load_more_button = driver.find_element(By.CLASS_NAME, Config["load_comments_class"])
+                    if load_more_button.is_displayed():
+                        print("Loading more comments...")
+                        driver.execute_script("arguments[0].scrollIntoView(false);", load_more_button)
+                        sleep(delays["after_scroll"])
+                        load_more_button.click()
+                        sleep(delays["after_click"])
+                        should_continue = True
+                        break  # Success, exit retry loop
+                    else:
+                        print("No more comments to load")
+                        should_continue = False
+                        break
+                except:
+                    retries += 1
+                    if retries < max_retries:
+                        print(f"Failed to load more comments. Retry {retries}/{max_retries} after 10 seconds...")
+                        sleep(10)
+                        continue
+                    else:
+                        print("Finished processing all comments after maximum retries")
+                        should_continue = False
+                        break
+            
+            if not should_continue:
+                break  # Break from parent loop when we're done loading comments
+        
+        print(f"Processing batch of {len(current_batch)} comments")
+        
+        for comment_article in current_batch:
+            try:
+                # Skip if already processed
+                if comment_article.id in processed_comments:
+                    continue
                 
-                if not replies_list or len(replies_list) == 0 or (replies_count and len(replies_count) > 0 and "0" in replies_count[0].text):
-                    print(f"Found comment with trigger string and no replies: {comment_text[:50]}...")
+                # Skip if this is a reply
+                try:
+                    if comment_article.find_element(By.CLASS_NAME, "comments-comment-entity--reply"):
+                        processed_comments.add(comment_article.id)
+                        continue
+                except:
+                    pass
+                
+                # Get the comment text
+                comment_text = comment_article.find_element(By.CLASS_NAME, Config["comment_class"])
+                if not comment_text:
+                    processed_comments.add(comment_article.id)
+                    continue
                     
-                    # Find and click the reply button within this comment's container
-                    reply_button = comment_article.find_element(By.CSS_SELECTOR, "button.reply")
-                    if reply_button:
-                        # Get the button's ID to find it with Selenium
-                        button_id = reply_button.get_attribute("id")
-                        if button_id:
-                            driver.execute_script("arguments[0].scrollIntoView(false);", reply_button)
-                            sleep(delays["after_scroll"])
-                            reply_button.click()
-                            sleep(delays["after_click"])
+                comment_text = comment_text.text.strip().lower()
+                print(f"Processing comment: {comment_text[:50]}...")
+                
+                # Check if comment contains trigger string
+                if Config["auto_reply"]["trigger_string"].lower() in comment_text:
+                    # Check for existing replies
+                    replies_list = comment_article.find_elements(By.CLASS_NAME, selectors["reply_container"])
+                    replies_count = comment_article.find_elements(By.CLASS_NAME, selectors["replies_count"])
+                    
+                    if not replies_list or len(replies_list) == 0 or (replies_count and len(replies_count) > 0 and "0" in replies_count[0].text):
+                        print(f"Found comment with trigger string and no replies: {comment_text[:50]}...")
+                        
+                        # Rest of the reply logic remains the same
+                        reply_button = comment_article.find_element(By.CSS_SELECTOR, "button.reply")
+                        if reply_button:
+                            button_id = reply_button.get_attribute("id")
+                            if button_id:
+                                driver.execute_script("arguments[0].scrollIntoView(false);", reply_button)
+                                sleep(delays["after_scroll"])
+                                reply_button.click()
+                                sleep(delays["after_click"])
 
-                            print("reply_button clicked")
-                            # Find and fill the reply input
-                            try:
-                                # First find the reply form that appears after clicking reply
-                                # reply_form = driver.find_element(By.CSS_SELECTOR, selectors["reply_form"])
-                                # Then find the input within this form's context
-                                reply_input = comment_article.find_element(By.CSS_SELECTOR, "div.ql-editor")
-                                
-                                # Clear any existing text first
-                                # reply_input.clear()
-
-                                print("reply_input")
-                                print(reply_input)
-                                # Type the reply message
-                                reply_input.send_keys(Config["auto_reply"]["reply_message"])
-                                sleep(delays["after_type"])
-                                
-                                # Click post button - using the updated selector within the form context
-                                post_button = comment_article.find_element(By.CLASS_NAME, selectors["post_button"])
-                                print("post_button")
-                                print(post_button)
-                                if not post_button.is_enabled():
-                                    print("Post button is not enabled, trying to trigger input event")
-                                    driver.execute_script(
-                                        "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
-                                        reply_input
-                                    )
-                                    sleep(0.5)
-                                
-                                if post_button.is_enabled():
-                                    post_button.click()
-                                    sleep(delays["after_post"])
-                                    print("Posted reply successfully")
-                                else:
-                                    print("Post button is still not enabled")
-                            except Exception as e:
-                                print(f"Error interacting with reply input: {str(e)}")
-                        else:
-                            print("Could not find reply button ID")
-                else:
-                    print(f"Skipping comment - already has replies")
-            else:
-                print(f"Skipping comment - does not contain trigger string: {comment_text[:50]}...")
-        except Exception as e:
-            print(f"Error processing comment: {str(e)}")
-            continue
+                                try:
+                                    reply_input = comment_article.find_element(By.CSS_SELECTOR, "div.ql-editor")
+                                    reply_input.send_keys(Config["auto_reply"]["reply_message"])
+                                    sleep(delays["after_type"])
+                                    
+                                    post_button = comment_article.find_element(By.CLASS_NAME, selectors["post_button"])
+                                    if not post_button.is_enabled():
+                                        driver.execute_script(
+                                            "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
+                                            reply_input
+                                        )
+                                        sleep(0.5)
+                                    
+                                    if post_button.is_enabled():
+                                        post_button.click()
+                                        sleep(delays["after_post"])
+                                        print("Posted reply successfully")
+                                    else:
+                                        print("Post button is still not enabled")
+                                except Exception as e:
+                                    print(f"Error interacting with reply input: {str(e)}")
+                
+                # Mark comment as processed regardless of outcome
+                processed_comments.add(comment_article.id)
+                
+            except Exception as e:
+                print(f"Error processing comment: {str(e)}")
+                # Still mark as processed to avoid infinite loops
+                processed_comments.add(comment_article.id)
+                continue
 
 # Continue with existing scraping logic
 bs_obj = BSoup(driver.page_source, "html.parser")
