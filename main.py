@@ -87,8 +87,12 @@ start = time()  # Starting time
 print("Initiating the process....")
 ##### Selenium Chrome Driver
 options = Options()
-options.headless = args.headless
-options.add_experimental_option("detach", True)
+options.add_argument("--headless")
+options.add_argument("--disable-gpu")
+options.add_argument("--no-sandbox")
+options.add_argument("enable-automation")
+options.add_argument("--disable-infobars")
+options.add_argument("--disable-dev-shm-usage")
 driver = webdriver.Chrome(
     options=options, service=Service(ChromeDriverManager().install())
 )
