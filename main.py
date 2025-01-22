@@ -7,8 +7,9 @@ from urllib.parse import urljoin
 import pickle
 import os
 from pathlib import Path
+from seleniumwire import webdriver
 
-from selenium import webdriver
+
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
@@ -53,6 +54,17 @@ parser.add_argument(
 )
 parser.set_defaults(save_page_source=False)
 
+parser.add_argument(
+    "--zenrows-username",
+    dest="zenrows_username",
+    help="Zenrows username",
+)
+parser.add_argument(
+    "--zenrows-password",
+    dest="zenrows_password",
+    help="Zenrows password",
+)
+
 
 args = parser.parse_args()
 
@@ -87,14 +99,25 @@ start = time()  # Starting time
 print("Initiating the process....")
 ##### Selenium Chrome Driver
 options = Options()
-options.add_argument("--headless")
+options.headless = args.headless
 options.add_argument("--disable-gpu")
 options.add_argument("--no-sandbox")
 options.add_argument("enable-automation")
 options.add_argument("--disable-infobars")
 options.add_argument("--disable-dev-shm-usage")
+seleniumwire_options = {}
+if args.zenrows_username and args.zenrows_password:
+    print("Using Zenrows proxy")
+    proxy_url = f"http://{args.zenrows_username}:{args.zenrows_password}@superproxy.zenrows.com:1337"
+    seleniumwire_options = {
+        "proxy": {
+            "http": f"{proxy_url}",
+            "https": f"{proxy_url}",
+        },
+    }
+
 driver = webdriver.Chrome(
-    options=options, service=Service(ChromeDriverManager().install())
+    options=options, service=Service(ChromeDriverManager().install()), seleniumwire_options=seleniumwire_options
 )
 # driver = webdriver.Safari()
 # driver.maximize_window()
@@ -109,6 +132,11 @@ def save_cookies(driver, filename):
 def load_cookies(driver, filename):
     """Load cookies from file and add them to driver"""
     if not os.path.exists(filename):
+        return False
+    
+    # Prompt user if they want to load cookies
+    choice = input("Do you want to load cookies? (y/N) : ")
+    if choice.lower() != "y":
         return False
     
     with open(filename, 'rb') as file:
@@ -144,8 +172,37 @@ if not cookies_loaded:
 
     sign_in_button = driver.find_element(By.XPATH, Config["sign_in_button_xpath"])
     sign_in_button.click()
+    # wait for navigation to complete
+    sleep(4)
 
-    input("Press Enter after completing 2FA (if required)...")
+    twofa_complete = False
+    try:
+        app_login_header = driver.find_element(By.CSS_SELECTOR, ".header__content__heading__inapp")
+        if not app_login_header.text.lower().contains("linkedin app"):
+            raise Exception("Not app based 2fa")
+        print("LinkedIn sent a notification to your signed in devices. Open your LinkedIn app and tap Yes to confirm your sign-in attempt.")
+        input("Press Enter after completing 2FA")
+        twofa_complete = True
+    except:
+        print("Not app based 2fa")
+
+    try:
+        two_step_challenge = driver.find_element(By.ID, "two-step-challenge")
+        print("Found sms 2fa challenge")
+        two_step_header = driver.find_element(By.CSS_SELECTOR, ".content__header")
+        ending_in = two_step_header.text.lower().split("ending in")[1].strip()
+        print(f"LinkedIn sent an SMS to your registered phone number (ending in {ending_in}). Enter the code in the prompt below.")
+        twofa_code = input("Enter the code: ")
+        twofa_input = driver.find_element(By.ID, "input__phone_verification_pin")
+        twofa_input.send_keys(twofa_code)
+        twofa_input.send_keys(Keys.ENTER)
+        twofa_complete = True
+    except Exception as e:
+        print(f"Error finding sms 2fa challenge: {str(e)}")
+        print("Not sms 2fa")
+
+    if not twofa_complete:
+        input("No known 2fa method found. It's possible there's no 2fa or you need to manually enter the code. Press Enter to attempt to continue...")
     
     save_cookies(driver, COOKIES_FILE)
 try:
