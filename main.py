@@ -190,7 +190,7 @@ if not cookies_loaded:
         two_step_challenge = driver.find_element(By.ID, "two-step-challenge")
         print("Found sms 2fa challenge")
         two_step_header = driver.find_element(By.CSS_SELECTOR, ".content__header")
-        ending_in = two_step_header.text.lower().split("ending in")[1].strip()
+        ending_in = two_step_header.text.lower().split("ending with")[1].strip()
         print(f"LinkedIn sent an SMS to your registered phone number (ending in {ending_in}). Enter the code in the prompt below.")
         twofa_code = input("Enter the code: ")
         twofa_input = driver.find_element(By.ID, "input__phone_verification_pin")
