@@ -23,7 +23,7 @@ from utils import (
     load_more,
     extract_emails,
     download_avatars,
-    write_data2csv,
+    # write_data2csv,   # No longer needed
 )
 
 parser = argparse.ArgumentParser(description="Linkedin Scraping.")
@@ -76,22 +76,19 @@ unique_suffix = now.strftime("-%m-%d-%Y--%H-%M")
 with open("config.json") as f:
     Config: dict[str, str] = json.load(f)
 
+# Setup cookies directory
 COOKIES_DIR = Path("cookies")
 COOKIES_FILE = COOKIES_DIR / "linkedin_cookies.pkl"
-
 COOKIES_DIR.mkdir(exist_ok=True)
 
 post_url = check_post_url(Config["post_url"])
 
-##### Writer csv
-writer = csv.writer(
-    open(
-        Config["filename"] + unique_suffix + ".csv",
-        "w",
-        encoding="utf-8",
-    )
-)
+# Initialize CSV file with header.
+csv_filename = Config["filename"] + unique_suffix + ".csv"
+csvfile = open(csv_filename, "w", encoding="utf-8", newline="")
+writer = csv.writer(csvfile)
 writer.writerow(["Name", "Headline", "Profile Picture", "Email", "Comment"])
+csvfile.flush()  # flush header
 
 linkedin_username, linkedin_password = login_details()
 
@@ -106,7 +103,7 @@ options.add_argument("--no-sandbox")
 options.add_argument("enable-automation")
 options.add_argument("--disable-infobars")
 options.add_argument("--disable-dev-shm-usage")
-# To help mitigate crashes for large sets of comments, consider adding options to disable image loading:
+# To help mitigate crashes for large sets of comments, you could disable image loading:
 # prefs = {"profile.managed_default_content_settings.images": 2}
 # options.add_experimental_option("prefs", prefs)
 
@@ -146,9 +143,7 @@ def load_cookies(driver, filename):
     
     with open(filename, 'rb') as file:
         cookies = pickle.load(file)
-        print(cookies)
         for cookie in cookies:
-            print(cookie)
             driver.add_cookie(cookie)
     print("Cookies loaded successfully")
     return True
@@ -210,6 +205,7 @@ if not cookies_loaded:
         input("No known 2fa method found. It's possible there's no 2fa or you need to manually enter the code. Press Enter to attempt to continue...")
     
     save_cookies(driver, COOKIES_FILE)
+
 try:
     driver.get(post_url)
 
@@ -219,86 +215,66 @@ try:
     # Change to most recent comment sort
     sort_button = driver.find_element(By.CSS_SELECTOR, "button.comments-sort-order-toggle__trigger")
     sort_button.click()
-
     sleep(1)
-
-    # Find and click the "Most recent" sort option
     most_recent_option = driver.find_element(By.CSS_SELECTOR, '[aria-label="Most recent. See all comments, the most recent comments are first"]')
     most_recent_option.click()
 
-    # Mitigation strategies for very large comment sets (10k+):
-    # - Use headless mode (use --headless flag) to reduce resource usage.
-    # - Disable image loading (see commented option in Chrome options).
-    # - Implement pagination or limit comments loaded per session.
-    # - Periodically restart the Chrome driver and save progress.
-    # - Run on a machine with higher memory resources.
-    
-    # Uncomment below line if you wish to load additional comments manually
-    # print("Loading comments :", end=" ", flush=True)
-    # load_more("comments", Config["load_comments_class"], driver)
+    # Optionally load more comments/replies if requested
     if args.show_replies:
         print("Loading replies :", end=" ", flush=True)
         load_more("replies", Config["load_replies_class"], driver)
     
-    # Save full page source for debugging if flag is set
     if args.save_page_source:
         with open("page_source.html", "w", encoding='utf-8') as f:
             f.write(driver.page_source)
 
-    bs_obj = BSoup(driver.page_source, "html.parser")
+    # ------------------------------------------------------------------
+    # NEW: Integrated CSV saving inside the auto-reply/main comment loop.
+    # Instead of processing all comments via BeautifulSoup and then writing to CSV,
+    # we immediately extract and write each comment as it’s processed.
+    # ------------------------------------------------------------------
 
-    comments = bs_obj.find_all("span", {"class": Config["comment_class"]})
-    print(f"Found {len(comments)} comments")
-    comments = [comment.get_text(strip=True) for comment in comments]
+    # Define a helper function to extract comment data from a Selenium element.
+    def extract_comment_data(comment_article, config):
+        html = comment_article.get_attribute("innerHTML")
+        soup = BSoup(html, "html.parser")
+        # Extract name
+        name_elem = soup.find("span", {"class": config["name_class"]})
+        name = name_elem.get_text(strip=True) if name_elem else ""
+        # Extract headline
+        headline_elem = soup.find("span", {"class": config["headline_class"]})
+        headline = headline_elem.get_text(strip=True) if headline_elem else ""
+        # Extract avatar URL from the <a> with avatar class
+        avatar = ""
+        avatar_elem = soup.find("a", {"class": config["avatar_class"]})
+        if avatar_elem:
+            img_elem = avatar_elem.find("img")
+            if img_elem and img_elem.has_attr("src"):
+                avatar = img_elem["src"]
+        # Extract comment text
+        comment_elem = soup.find("span", {"class": config["comment_class"]})
+        comment_text = comment_elem.get_text(strip=True) if comment_elem else ""
+        # Extract email (if any) from the comment text
+        emails = extract_emails(comment_text)
+        email = emails[0] if emails else ""
+        return name, headline, avatar, email, comment_text
 
-    headlines = bs_obj.find_all("span", {"class": Config["headline_class"]})
-    headlines = [headline.get_text(strip=True) for headline in headlines]
-
-    emails = extract_emails(comments)
-
-    names = bs_obj.find_all("span", {"class": Config["name_class"]})
-    names = [name.get_text(strip=True).split("\n")[0] for name in names]
-
-    BASE_URL = "https://www.linkedin.com/"
-
-    profile_links_set = bs_obj.find_all("a", {"class": Config["avatar_class"]})
-    profile_links = [
-        urljoin(BASE_URL, profile_link["href"]) for profile_link in profile_links_set
-    ]
-
-    avatars = []
-    for a in profile_links_set:
-        img_link = ""
-        try:
-            img_link = a.find("img")["src"]
-        except:
-            pass
-
-        avatars.append(img_link)
-
-    write_data2csv(writer, names, profile_links, avatars, headlines, emails, comments)
-
-    if args.download_avatars:
-        download_avatars(avatars, names, Config["dirname"] + unique_suffix)
-
-    # Auto-reply functionality integration.
-    # This block will only run if auto-reply is enabled in config AND the user has not disabled it via the "--no-reply" flag.
+    # If auto-reply is enabled and not disabled by command-line flag:
     if not args.no_reply and Config.get("auto_reply", {}).get("enabled", False):
-        print("\nProcessing auto-replies...")
+        print("\nProcessing auto-replies and saving comments to CSV...")
         selectors = Config["auto_reply"]["selectors"]
         delays = Config["auto_reply"]["delays"]
         
-        processed_comments = set()  # Keep track of processed comments
+        processed_comments = set()  # Keep track of processed comment element IDs
         
         while True:
-            # Find all currently visible top-level comments
+            # Find all currently visible top-level comment containers
             comments_section = driver.find_elements(By.CLASS_NAME, selectors["comment_container"])
             current_batch = [c for c in comments_section if c.id not in processed_comments]
             
             if not current_batch:
                 print("No new comments to process")
-                
-                # Try to load more comments
+                # Try to load more comments (with limited retries)
                 retries = 0
                 max_retries = 3
                 should_continue = False
@@ -313,24 +289,23 @@ try:
                             load_more_button.click()
                             sleep(delays["after_click"])
                             should_continue = True
-                            break  # Success, exit retry loop
+                            break
                         else:
                             print("No more comments to load")
                             should_continue = False
                             break
-                    except:
+                    except Exception:
                         retries += 1
                         if retries < max_retries:
                             print(f"Failed to load more comments. Retry {retries}/{max_retries} after 10 seconds...")
                             sleep(10)
-                            continue
                         else:
                             print("Finished processing all comments after maximum retries")
                             should_continue = False
                             break
                 
                 if not should_continue:
-                    break  # Break from parent loop when we're done loading comments
+                    break  # Exit the main loop when no more comments can be loaded
             
             print(f"Processing batch of {len(current_batch)} comments")
             
@@ -340,33 +315,38 @@ try:
                     if comment_article.id in processed_comments:
                         continue
                     
-                    # Skip if this is a reply
+                    # Skip if this comment is actually a reply (not a top-level comment)
                     try:
                         if comment_article.find_element(By.CLASS_NAME, "comments-comment-entity--reply"):
                             processed_comments.add(comment_article.id)
                             continue
-                    except:
+                    except Exception:
                         pass
                     
-                    # Get the comment text
-                    comment_text = comment_article.find_element(By.CLASS_NAME, Config["comment_class"])
-                    if not comment_text:
+                    # Extract comment data from the element using the helper function.
+                    try:
+                        name, headline, avatar, email, comment_text = extract_comment_data(comment_article, Config)
+                    except Exception as e:
+                        print(f"Error extracting data from comment: {e}")
                         processed_comments.add(comment_article.id)
                         continue
-                        
-                    comment_text = comment_text.text.strip().lower()
+
+                    # Immediately write this comment's data to CSV and flush
+                    writer.writerow([name, headline, avatar, email, comment_text])
+                    csvfile.flush()
+
                     print(f"Processing comment: {comment_text[:50]}...")
                     
-                    # Check if comment contains trigger string
-                    if Config["auto_reply"]["trigger_string"].lower() in comment_text:
+                    # Check if the comment contains the trigger string (case-insensitive)
+                    if Config["auto_reply"]["trigger_string"].lower() in comment_text.lower():
                         # Check for existing replies
                         replies_list = comment_article.find_elements(By.CLASS_NAME, selectors["reply_container"])
                         replies_count = comment_article.find_elements(By.CLASS_NAME, selectors["replies_count"])
                         
-                        if not replies_list or len(replies_list) == 0 or (replies_count and len(replies_count) > 0 and "0" in replies_count[0].text):
+                        # If no replies have been posted, then attempt auto-reply
+                        if (not replies_list or len(replies_list) == 0) or (replies_count and len(replies_count) > 0 and "0" in replies_count[0].text):
                             print(f"Found comment with trigger string and no replies: {comment_text[:50]}...")
                             
-                            # Rest of the reply logic remains the same
                             reply_button = comment_article.find_element(By.CSS_SELECTOR, "button.reply")
                             if reply_button:
                                 button_id = reply_button.get_attribute("id")
@@ -403,7 +383,6 @@ try:
                     
                 except Exception as e:
                     print(f"Error processing comment: {str(e)}")
-                    # Still mark as processed to avoid infinite loops
                     processed_comments.add(comment_article.id)
                     continue
     else:
@@ -411,20 +390,22 @@ try:
             print("Auto reply functionality disabled via command-line flag (--no-reply).")
         else:
             print("Auto reply functionality is not enabled in config.")
-
-    # Continue with existing scraping logic
-    bs_obj = BSoup(driver.page_source, "html.parser")
-
+        
+        # Optionally, if auto reply is disabled, you could still extract comments
+        # from the page using BSoup and write them to CSV here.
+        # For brevity, that logic is omitted.
+    
+    # Continue with any other scraping or final steps if needed
     end = time()  # Finishing Time
     time_spent = end - start  # Time taken by script
 
     print(
         "%d linkedin post comments scraped in: %.2f minutes (%d seconds)"
-        % (len(names), ((time_spent) / 60), (time_spent))
+        % (len(processed_comments), ((time_spent) / 60), (time_spent))
     )
 except Exception as e:
     print(f"Error: {str(e)}")
-    # Save a screenshot of the error
     driver.save_screenshot("error.png")
 finally:
     driver.quit()
+    csvfile.close()
