@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 from seleniumwire import webdriver
 
-
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
@@ -50,7 +49,7 @@ parser.add_argument(
     "--save-page-source",
     dest="save_page_source",
     action="store_true",
-    help="Safe page source for debugging",
+    help="Save page source for debugging",
 )
 parser.set_defaults(save_page_source=False)
 
@@ -65,15 +64,16 @@ parser.add_argument(
     help="Zenrows password",
 )
 
+# New flag to disable auto reply functionality if desired
+parser.add_argument("--no-reply", dest="no_reply", action="store_true", help="Disable auto reply functionality")
+parser.set_defaults(no_reply=False)
 
 args = parser.parse_args()
 
 now = datetime.now()
 unique_suffix = now.strftime("-%m-%d-%Y--%H-%M")
 
-with open(
-    "config.json",
-) as f:
+with open("config.json") as f:
     Config: dict[str, str] = json.load(f)
 
 COOKIES_DIR = Path("cookies")
@@ -97,6 +97,7 @@ linkedin_username, linkedin_password = login_details()
 
 start = time()  # Starting time
 print("Initiating the process....")
+
 ##### Selenium Chrome Driver
 options = Options()
 options.headless = args.headless
@@ -105,6 +106,10 @@ options.add_argument("--no-sandbox")
 options.add_argument("enable-automation")
 options.add_argument("--disable-infobars")
 options.add_argument("--disable-dev-shm-usage")
+# To help mitigate crashes for large sets of comments, consider adding options to disable image loading:
+# prefs = {"profile.managed_default_content_settings.images": 2}
+# options.add_experimental_option("prefs", prefs)
+
 seleniumwire_options = {}
 if args.zenrows_username and args.zenrows_password:
     print("Using Zenrows proxy")
@@ -208,47 +213,34 @@ if not cookies_loaded:
 try:
     driver.get(post_url)
 
-    # wait for 1 second
+    # Wait for the page to load completely
     sleep(4)
 
-    # change to most recent comment sort
+    # Change to most recent comment sort
     sort_button = driver.find_element(By.CSS_SELECTOR, "button.comments-sort-order-toggle__trigger")
     sort_button.click()
 
-    # wait for 1 second
     sleep(1)
 
-    # # find the most recent comment sort option
+    # Find and click the "Most recent" sort option
     most_recent_option = driver.find_element(By.CSS_SELECTOR, '[aria-label="Most recent. See all comments, the most recent comments are first"]')
     most_recent_option.click()
 
-    # input("Press Switch to most recent to continue...")
-
+    # Mitigation strategies for very large comment sets (10k+):
+    # - Use headless mode (use --headless flag) to reduce resource usage.
+    # - Disable image loading (see commented option in Chrome options).
+    # - Implement pagination or limit comments loaded per session.
+    # - Periodically restart the Chrome driver and save progress.
+    # - Run on a machine with higher memory resources.
+    
+    # Uncomment below line if you wish to load additional comments manually
     # print("Loading comments :", end=" ", flush=True)
     # load_more("comments", Config["load_comments_class"], driver)
     if args.show_replies:
         print("Loading replies :", end=" ", flush=True)
         load_more("replies", Config["load_replies_class"], driver)
-    # comments = driver.find_elements(By.XPATH, '//span[@class="ember-view"]')
-    # this is bad because in case of comments with mentions or tags, it doesnt work
-    # comments = driver.find_elements(By.CLASS_NAME, Config["comment_class"])
-    # # print(comments)
-    # comments = [comment.text.strip() for comment in comments]
-
-    # headlines = driver.find_elements(By.CLASS_NAME, Config["headline_class"])
-    # headlines = [headline.text.strip() for headline in headlines]
-
-    # emails = extract_emails(comments)
-
-    # names = driver.find_elements(By.CLASS_NAME, Config["name_class"])
-    # names = [name.text.split("\n")[0] for name in names]
-
-    # avatars = driver.find_elements(By.CLASS_NAME, Config["avatar_class"])
-    # avatars = [
-    #     avatar.find_element(By.TAG_NAME, "img").get_attribute("src") for avatar in avatars
-    # ]
-
-    # safe full page source to file, for post-download processing
+    
+    # Save full page source for debugging if flag is set
     if args.save_page_source:
         with open("page_source.html", "w", encoding='utf-8') as f:
             f.write(driver.page_source)
@@ -284,22 +276,14 @@ try:
 
         avatars.append(img_link)
 
-    # DEBUGGING
-    # DEBUG_LENGTH = 10
-    # print(names[:DEBUG_LENGTH])
-    # print(profile_links[:DEBUG_LENGTH])
-    # print(avatars[:DEBUG_LENGTH])
-    # print(headlines[:DEBUG_LENGTH])
-    # print(emails[:DEBUG_LENGTH])
-    # print(comments[:DEBUG_LENGTH])
-
     write_data2csv(writer, names, profile_links, avatars, headlines, emails, comments)
 
     if args.download_avatars:
         download_avatars(avatars, names, Config["dirname"] + unique_suffix)
 
-    # Auto-reply functionality
-    if Config.get("auto_reply", {}).get("enabled", False):
+    # Auto-reply functionality integration.
+    # This block will only run if auto-reply is enabled in config AND the user has not disabled it via the "--no-reply" flag.
+    if not args.no_reply and Config.get("auto_reply", {}).get("enabled", False):
         print("\nProcessing auto-replies...")
         selectors = Config["auto_reply"]["selectors"]
         delays = Config["auto_reply"]["delays"]
@@ -422,6 +406,11 @@ try:
                     # Still mark as processed to avoid infinite loops
                     processed_comments.add(comment_article.id)
                     continue
+    else:
+        if args.no_reply:
+            print("Auto reply functionality disabled via command-line flag (--no-reply).")
+        else:
+            print("Auto reply functionality is not enabled in config.")
 
     # Continue with existing scraping logic
     bs_obj = BSoup(driver.page_source, "html.parser")
@@ -435,7 +424,7 @@ try:
     )
 except Exception as e:
     print(f"Error: {str(e)}")
-    # save a screenshot of the error
+    # Save a screenshot of the error
     driver.save_screenshot("error.png")
 finally:
     driver.quit()
