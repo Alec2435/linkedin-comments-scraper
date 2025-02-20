@@ -14,7 +14,7 @@ from selenium.webdriver.chrome.options import Options
 from webdriver_manager.chrome import ChromeDriverManager
 from selenium.webdriver.common.by import By
 from selenium.webdriver.common.keys import Keys
-from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import NoSuchElementException, WebDriverException
 from bs4 import BeautifulSoup as BSoup
 
 from utils import (
@@ -103,9 +103,12 @@ options.add_argument("--no-sandbox")
 options.add_argument("enable-automation")
 options.add_argument("--disable-infobars")
 options.add_argument("--disable-dev-shm-usage")
-# To help mitigate crashes for large sets of comments, you could disable image loading:
-# prefs = {"profile.managed_default_content_settings.images": 2}
-# options.add_experimental_option("prefs", prefs)
+options.add_argument("--disable-extensions")  # Additional flag to disable extensions
+options.add_argument("--log-level=3")  # reduce logging
+
+# Disable image loading to lower memory usage and avoid crashes:
+prefs = {"profile.managed_default_content_settings.images": 2}
+options.add_experimental_option("prefs", prefs)
 
 seleniumwire_options = {}
 if args.zenrows_username and args.zenrows_password:
@@ -178,12 +181,13 @@ if not cookies_loaded:
     twofa_complete = False
     try:
         app_login_header = driver.find_element(By.CSS_SELECTOR, ".header__content__heading__inapp")
-        if not app_login_header.text.lower().contains("linkedin app"):
+        # Fix: use proper membership test instead of .contains()
+        if 'linkedin app' not in app_login_header.text.lower():
             raise Exception("Not app based 2fa")
         print("LinkedIn sent a notification to your signed in devices. Open your LinkedIn app and tap Yes to confirm your sign-in attempt.")
         input("Press Enter after completing 2FA")
         twofa_complete = True
-    except:
+    except Exception as e:
         print("Not app based 2fa")
 
     try:
@@ -229,12 +233,10 @@ try:
             f.write(driver.page_source)
 
     # ------------------------------------------------------------------
-    # NEW: Integrated CSV saving inside the auto-reply/main comment loop.
-    # Instead of processing all comments via BeautifulSoup and then writing to CSV,
-    # we immediately extract and write each comment as it’s processed.
+    # Integrated CSV saving inside the auto-reply/main comment loop.
+    # Immediately extract and write each comment as it’s processed.
     # ------------------------------------------------------------------
 
-    # Define a helper function to extract comment data from a Selenium element.
     def extract_comment_data(comment_article, config):
         html = comment_article.get_attribute("innerHTML")
         soup = BSoup(html, "html.parser")
@@ -259,22 +261,22 @@ try:
         email = emails[0] if emails else ""
         return name, headline, avatar, email, comment_text
 
-    # If auto-reply is enabled and not disabled by command-line flag:
     if not args.no_reply and Config.get("auto_reply", {}).get("enabled", False):
         print("\nProcessing auto-replies and saving comments to CSV...")
         selectors = Config["auto_reply"]["selectors"]
         delays = Config["auto_reply"]["delays"]
         
-        processed_comments = set()  # Keep track of processed comment element IDs
+        processed_comments = set()  # Track processed comment element IDs
         
         while True:
-            # Find all currently visible top-level comment containers
+            # Find all currently visible comment containers
             comments_section = driver.find_elements(By.CLASS_NAME, selectors["comment_container"])
+            # Only process elements that have not yet been processed.
             current_batch = [c for c in comments_section if c.id not in processed_comments]
             
             if not current_batch:
                 print("No new comments to process")
-                # Try to load more comments (with limited retries)
+                # Attempt to load more comments (with limited retries)
                 retries = 0
                 max_retries = 3
                 should_continue = False
@@ -305,25 +307,18 @@ try:
                             break
                 
                 if not should_continue:
-                    break  # Exit the main loop when no more comments can be loaded
+                    break  # Exit the loop when no more comments can be loaded
             
             print(f"Processing batch of {len(current_batch)} comments")
             
             for comment_article in current_batch:
                 try:
-                    # Skip if already processed
-                    if comment_article.id in processed_comments:
+                    # Instead of checking for a child element (which might be a nested reply),
+                    # check if the element itself has the reply class.
+                    if "comments-comment-entity--reply" in comment_article.get_attribute("class"):
+                        processed_comments.add(comment_article.id)
                         continue
                     
-                    # Skip if this comment is actually a reply (not a top-level comment)
-                    try:
-                        if comment_article.find_element(By.CLASS_NAME, "comments-comment-entity--reply"):
-                            processed_comments.add(comment_article.id)
-                            continue
-                    except Exception:
-                        pass
-                    
-                    # Extract comment data from the element using the helper function.
                     try:
                         name, headline, avatar, email, comment_text = extract_comment_data(comment_article, Config)
                     except Exception as e:
@@ -331,54 +326,52 @@ try:
                         processed_comments.add(comment_article.id)
                         continue
 
-                    # Immediately write this comment's data to CSV and flush
                     writer.writerow([name, headline, avatar, email, comment_text])
                     csvfile.flush()
 
                     print(f"Processing comment: {comment_text[:50]}...")
                     
-                    # Check if the comment contains the trigger string (case-insensitive)
                     if Config["auto_reply"]["trigger_string"].lower() in comment_text.lower():
                         # Check for existing replies
                         replies_list = comment_article.find_elements(By.CLASS_NAME, selectors["reply_container"])
                         replies_count = comment_article.find_elements(By.CLASS_NAME, selectors["replies_count"])
                         
-                        # If no replies have been posted, then attempt auto-reply
                         if (not replies_list or len(replies_list) == 0) or (replies_count and len(replies_count) > 0 and "0" in replies_count[0].text):
                             print(f"Found comment with trigger string and no replies: {comment_text[:50]}...")
                             
                             reply_button = comment_article.find_element(By.CSS_SELECTOR, "button.reply")
                             if reply_button:
-                                button_id = reply_button.get_attribute("id")
-                                if button_id:
-                                    driver.execute_script("arguments[0].scrollIntoView(false);", reply_button)
-                                    sleep(delays["after_scroll"])
+                                driver.execute_script("arguments[0].scrollIntoView(false);", reply_button)
+                                sleep(delays["after_scroll"])
+                                try:
                                     reply_button.click()
-                                    sleep(delays["after_click"])
+                                except Exception as click_error:
+                                    # Fallback to JavaScript click if normal click fails
+                                    driver.execute_script("arguments[0].click();", reply_button)
+                                sleep(delays["after_click"])
 
-                                    try:
-                                        reply_input = comment_article.find_element(By.CSS_SELECTOR, "div.ql-editor")
-                                        reply_input.send_keys(Config["auto_reply"]["reply_message"])
-                                        sleep(delays["after_type"])
-                                        
-                                        post_button = comment_article.find_element(By.CLASS_NAME, selectors["post_button"])
-                                        if not post_button.is_enabled():
-                                            driver.execute_script(
-                                                "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
-                                                reply_input
-                                            )
-                                            sleep(0.5)
-                                        
-                                        if post_button.is_enabled():
-                                            post_button.click()
-                                            sleep(delays["after_post"])
-                                            print("Posted reply successfully")
-                                        else:
-                                            print("Post button is still not enabled")
-                                    except Exception as e:
-                                        print(f"Error interacting with reply input: {str(e)}")
+                                try:
+                                    reply_input = comment_article.find_element(By.CSS_SELECTOR, "div.ql-editor")
+                                    reply_input.send_keys(Config["auto_reply"]["reply_message"])
+                                    sleep(delays["after_type"])
+                                    
+                                    post_button = comment_article.find_element(By.CLASS_NAME, selectors["post_button"])
+                                    if not post_button.is_enabled():
+                                        driver.execute_script(
+                                            "arguments[0].dispatchEvent(new Event('input', { bubbles: true }));",
+                                            reply_input
+                                        )
+                                        sleep(0.5)
+                                    
+                                    if post_button.is_enabled():
+                                        post_button.click()
+                                        sleep(delays["after_post"])
+                                        print("Posted reply successfully")
+                                    else:
+                                        print("Post button is still not enabled")
+                                except Exception as e:
+                                    print(f"Error interacting with reply input: {str(e)}")
                     
-                    # Mark comment as processed regardless of outcome
                     processed_comments.add(comment_article.id)
                     
                 except Exception as e:
@@ -390,22 +383,22 @@ try:
             print("Auto reply functionality disabled via command-line flag (--no-reply).")
         else:
             print("Auto reply functionality is not enabled in config.")
-        
-        # Optionally, if auto reply is disabled, you could still extract comments
-        # from the page using BSoup and write them to CSV here.
-        # For brevity, that logic is omitted.
+        # Optionally add alternative extraction logic for when auto-reply is off.
     
-    # Continue with any other scraping or final steps if needed
-    end = time()  # Finishing Time
-    time_spent = end - start  # Time taken by script
+    end = time()
+    time_spent = end - start
 
     print(
         "%d linkedin post comments scraped in: %.2f minutes (%d seconds)"
-        % (len(processed_comments), ((time_spent) / 60), (time_spent))
+        % (len(processed_comments), (time_spent / 60), time_spent)
     )
 except Exception as e:
     print(f"Error: {str(e)}")
-    driver.save_screenshot("error.png")
+    try:
+        driver.save_screenshot("error.png")
+    except Exception as screenshot_error:
+        print("Unable to save screenshot due to invalid session:", screenshot_error)
+        pass
 finally:
     driver.quit()
     csvfile.close()

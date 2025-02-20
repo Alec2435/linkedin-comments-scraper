@@ -12,21 +12,6 @@ from selenium.webdriver.support.wait import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.webdriver.common.action_chains import ActionChains
 
-
-"""
-Redundant piece of Code
-
-def str2bool(v):
-    if isinstance(v, bool):
-        return v
-    if v.lower() in ("yes", "true", "t", "y", "1"):
-        return True
-    elif v.lower() in ("no", "false", "f", "n", "0"):
-        return False
-    else:
-        raise argparse.ArgumentTypeError("Boolean value expected.")
-"""
-
 def check_post_url(post_url: str):
     if not post_url:
         print("You haven't entered required post_url in config.json file!")
@@ -39,16 +24,12 @@ def check_post_url(post_url: str):
         else:
             print("Invalid choice!")
             sys.exit(1)
-
     return post_url
-
 
 def login_details() -> tuple[str, str]:
     credentials_exist = True
     try:
-        with open(
-            "credentials.json",
-        ) as f:
+        with open("credentials.json") as f:
             Creds: dict[str, str] = json.load(f)
     except:
         credentials_exist = False
@@ -61,9 +42,7 @@ def login_details() -> tuple[str, str]:
     username = input("Enter your email registered in LinkedIn : ")
     password = getpass("Enter your password : ")
     save_credentials(username, password)
-
     return username, password
-
 
 def save_credentials(email: str, password: str):
     print("Entering credentials everytime is boring :/")
@@ -72,11 +51,9 @@ def save_credentials(email: str, password: str):
         with open("credentials.json", "w") as f:
             json.dump({"email": email, "password": password}, f)
 
-
 def load_more(target: str, target_class: str, driver: webdriver.Chrome):
     webdriver_wait = WebDriverWait(driver, 10)
     action = ActionChains(driver)
-
     try:
         load_more_button = webdriver_wait.until(
             EC.element_to_be_clickable((By.CLASS_NAME, target_class))
@@ -86,7 +63,6 @@ def load_more(target: str, target_class: str, driver: webdriver.Chrome):
         return
 
     print("[", end="", flush=True)
-
     while True:
         print("#", end="", flush=True)
         action.move_to_element(load_more_button).click().perform()
@@ -100,17 +76,10 @@ def load_more(target: str, target_class: str, driver: webdriver.Chrome):
             print(f"All {target} have been displayed!")
             break
 
-
-def extract_emails(comments: list[str]) -> list[str]:
-    emails = []
-    for comment in comments:
-        email_match = re.findall(r"[\w\.-]+@[\w\.-]+\.\w+", comment)
-        if email_match:
-            emails.append(email_match)
-        else:
-            emails.append("-")
-    return emails
-
+def extract_emails(comment: str) -> list[str]:
+    # Updated to accept a single string instead of a list
+    email_match = re.findall(r"[\w\.-]+@[\w\.-]+\.\w+", comment)
+    return email_match
 
 def write_data2csv(
     writer,
@@ -127,8 +96,6 @@ def write_data2csv(
         writer.writerow(
             [name, profile_link, avatar, headline, email, comment.encode("utf-8")]
         )
-        # utf-8 encoding helps to deal with emojis
-
 
 def download_avatars(urls: list[str], filenames: list[str], dir_name: str):
     try:
