@@ -214,7 +214,7 @@ try:
     driver.get(post_url)
 
     # Wait for the page to load completely
-    sleep(4)
+    sleep(15)
 
     # Change to most recent comment sort
     sort_button = driver.find_element(By.CSS_SELECTOR, "button.comments-sort-order-toggle__trigger")
