@@ -107,8 +107,8 @@ options.add_argument("--disable-extensions")  # Additional flag to disable exten
 options.add_argument("--log-level=3")  # reduce logging
 
 # Disable image loading to lower memory usage and avoid crashes:
-prefs = {"profile.managed_default_content_settings.images": 2}
-options.add_experimental_option("prefs", prefs)
+# prefs = {"profile.managed_default_content_settings.images": 2}
+# options.add_experimental_option("prefs", prefs)
 
 seleniumwire_options = {}
 if args.zenrows_username and args.zenrows_password:
